@@ -10,6 +10,12 @@ class LayerStateException(Exception):
         super().__init__(self.message)
 
 
+class RunFullException(Exception):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
+
 class MinerNotRegisteredException(Exception):
     def __init__(self, message: str):
         self.message = message

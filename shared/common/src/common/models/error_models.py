@@ -36,8 +36,23 @@ class S3FileNotFoundError(Exception):
         self.message = message
 
 
+class RunFullError(BaseModel):
+    message: str = "Run is full"
+    name: Optional[str] = None
+
+
 class EntityNotRegisteredError(BaseModel):
     message: str = "Entity not registered"
+    name: Optional[str] = None
+
+
+class EntityOnMetagraphError(BaseModel):
+    message: str = "Entity is on the metagraph but shouldn't be (pool miner)"
+    name: Optional[str] = None
+
+
+class EntityNotOnMetagraphError(BaseModel):
+    message: str = "Entity is not on the metagraph but should be (non-pool miner)"
     name: Optional[str] = None
 
 

@@ -67,7 +67,9 @@ class EpistulaHeaders(BaseModel):
 
             verified = keypair.verify(message, self.request_signature)
             if not verified:
-                raise ValueError("Signature Mismatch")
+                raise ValueError(
+                    f"Signature Mismatch (body/signature/address): {body} : {self.request_signature} : {keypair.ss58_address}"
+                )
 
         except ValueError as e:
             logger.error("signature_verification_failed", error=e)

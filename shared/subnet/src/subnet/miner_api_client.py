@@ -15,8 +15,13 @@ from common.models.api_models import (
     SyncActivationAssignmentsRequest,
     WeightUpdate,
 )
-from common.models.error_models import LayerStateError, EntityNotRegisteredError, SpecVersionError
-from common.utils.exceptions import LayerStateException, MinerNotRegisteredException, SpecVersionException
+from common.models.error_models import LayerStateError, EntityNotRegisteredError, RunFullError, SpecVersionError
+from common.utils.exceptions import (
+    LayerStateException,
+    MinerNotRegisteredException,
+    RunFullException,
+    SpecVersionException,
+)
 from common.utils.partitions import MinerPartition
 from common.utils.s3_utils import upload_parts
 from common.utils.shared_states import LayerPhase
@@ -48,6 +53,17 @@ class MinerAPIClient(CommonAPIClient):
             return MinerRegistrationResponse.model_validate(parsed_response)
         except Exception as e:
             logger.error(f"Error registering miner: {e}")
+            raise
+
+    async def change_payout_coldkey_request(self, payout_coldkey: str) -> dict:
+        try:
+            response = await CommonAPIClient.orchestrator_request(
+                method="POST", path="/miner/payout_coldkey", hotkey=self.hotkey, body={"payout_coldkey": payout_coldkey}
+            )
+            parsed_response = self.parse_response(response)
+            return parsed_response
+        except Exception as e:
+            logger.error(f"Error changing payout coldkey: {e}")
             raise
 
     async def get_layer_state_request(self) -> LayerPhase | dict:
@@ -262,6 +278,9 @@ class MinerAPIClient(CommonAPIClient):
         if not isinstance(response, dict):
             return response
         if (error_name := response.get("error_name")) is not None:
+            if error_name == RunFullError.__name__:
+                logger.error(f"Run is full: {response['error_dict']}")
+                raise RunFullException(response["error_dict"]["message"])
             if error_name == LayerStateError.__name__:
                 logger.warning(f"Layer state change: {response['error_dict']}")
                 error_dict = LayerStateError(**response["error_dict"])

@@ -5,7 +5,20 @@ description = "IOTA Miner"
 authors = [{ name = "Macrocosmos.ai" }]
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["common", "subnet"]
+dependencies = [
+    "common",
+    "subnet",
+    "textual>=0.74.0",
+    "psutil>=7.1.1",
+    "blessed>=1.23.0",
+    "bittensor-cli>=9.13.1",
+    "platformdirs>=4.5.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+  "pyinstaller>=6.16.0"
+]
 
 [build-system]
 requires = ["hatchling"]

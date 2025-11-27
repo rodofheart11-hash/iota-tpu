@@ -1,14 +1,19 @@
 import asyncio
 import copy
-from loguru import logger
 import json
+import multiprocessing
 import sys
-from common.utils.timer_logger import TimerLogger
+import threading
+import time
+import webbrowser
+from loguru import logger
+from miner.utils.miner_dashboard_api import start_visualization_server
 from miner.utils.partition_merging import download_previous_optimizer_state_for_partition_batch, merge_partition_batch
 from miner.utils.partition_merging import get_partition_batch
 from miner.utils.partition_merging import download_pseudograds_for_partition_batch
 from miner.utils.partition_merging import upload_partition_batch
 from subnet.utils.partition_utils import save_model_weights_and_optimizer_state
+from miner.utils.timer_logger import TimerLoggerMiner
 import torch
 import aiohttp
 from bittensor import Wallet
@@ -40,6 +45,7 @@ from common.utils.exceptions import (
     LayerStateException,
     RateLimitException,
     MinerNotRegisteredException,
+    RunFullException,
     NanInfException,
     NanInfWarning,
     SpecVersionException,
@@ -77,8 +83,48 @@ class Miner(BaseNeuron, HealthServerMixin):
             state_manager=self.state_manager,
             model_manager=self.model_manager,
         )
+        self.visualization_process: multiprocessing.Process | None = None
+
+    def _start_visualization_server_process(self, port: int = 8009):
+        """Start the visualization server in a separate process."""
+        try:
+            self.visualization_process = multiprocessing.Process(
+                target=start_visualization_server, args=(port,), daemon=True, name="VisualizationServer"
+            )
+            self.visualization_process.start()
+            logger.info(f"✅ Visualization server started in separate process (PID: {self.visualization_process.pid})")
+        except Exception as e:
+            logger.exception(f"Error starting visualization server process: {e}")
+
+    def _stop_visualization_server_process(self):
+        """Stop the visualization server process."""
+        if self.visualization_process and self.visualization_process.is_alive():
+            logger.info("Stopping visualization server process...")
+            self.visualization_process.terminate()
+            self.visualization_process.join(timeout=5)
+            if self.visualization_process.is_alive():
+                logger.warning("Visualization server did not terminate gracefully, forcing kill...")
+                self.visualization_process.kill()
+                self.visualization_process.join()
+            logger.info("✅ Visualization server stopped")
+
+    def _open_visualization_tab(self, url: str, delay: float = 2.0) -> None:
+        """Open the visualization UI in the user's default browser after a short delay."""
+
+        def _open() -> None:
+            time.sleep(delay)
+            try:
+                webbrowser.open(url, new=2)
+            except Exception as exc:  # pragma: no cover - depends on host browser support
+                logger.warning(f"Could not auto-open visualization tab: {exc}")
+
+        threading.Thread(target=_open, name="VisualizationTabOpener", daemon=True).start()
 
     async def run(self):
+        self._start_visualization_server_process(port=8009)
+        if miner_settings.VISUALIZATION_AUTO_OPEN:
+            self._open_visualization_tab("http://localhost:8009/vis.html")
+
         await self.reset_miner_state()
         logger.info(f"🚀 Starting miner {self.hotkey[:8]} on layer {self.layer} | Timeout: {miner_settings.TIMEOUT}s")
 
@@ -111,9 +157,10 @@ class Miner(BaseNeuron, HealthServerMixin):
                     if self.miner_api_client.layer_state == LayerPhase.TRAINING:
                         if self.need_to_pull_weights:
                             try:
-                                async with TimerLogger(
+                                async with TimerLoggerMiner(
                                     name="download_and_set_global_weights",
                                     metadata={"hotkey": self.hotkey[:8], "layer": self.state_manager.layer},
+                                    hotkey=self.hotkey[:8],
                                 ):
                                     await self.download_and_set_global_weights(
                                         device=miner_settings.DEVICE,
@@ -194,6 +241,13 @@ class Miner(BaseNeuron, HealthServerMixin):
 
                 await asyncio.sleep(1.1)
 
+            except RunFullException as e:
+                logger.warning(
+                    f"🔄 Miner {self.hotkey[:8]} cannot join run because it is full. Retrying in 60 seconds: {e}"
+                )
+                await asyncio.sleep(60)
+                await self.reset_miner_state()
+                continue
             except LayerStateException as e:
                 logger.info(f"🔄 Miner {self.hotkey[:8]} layer state change...: {e}")
                 continue
@@ -239,7 +293,7 @@ class Miner(BaseNeuron, HealthServerMixin):
         """
         while True:
             try:
-                if not common_settings.BITTENSOR:
+                if common_settings.TEST_MODE:
                     await TestAPIClient.register_to_metagraph(hotkey=self.wallet.hotkey)
 
                 logger.info(f"🔄 Attempting to fetch run info for miner {self.hotkey[:8]}...")
@@ -253,13 +307,21 @@ class Miner(BaseNeuron, HealthServerMixin):
                 logger.info(
                     f"🔄 Attempting to register miner {self.hotkey[:8]} on run {best_run.run_id} with orchestrator..."
                 )
-                register_request = RegisterMinerRequest(run_id=best_run.run_id)
+                register_request = RegisterMinerRequest(run_id=best_run.run_id, register_as_metagraph_miner=True)
                 response: MinerRegistrationResponse = await self.miner_api_client.register_miner_request(
                     register_miner_request=register_request
                 )
 
                 assigned_layer = int(response.layer)
                 current_epoch = int(response.current_epoch)
+
+                if response.num_partitions is None:
+                    raise Exception(f"Number of partitions is None for miner {self.hotkey[:8]}")
+
+                logger.debug(f"Number of partitions for miner {self.hotkey[:8]}: {response.num_partitions}")
+
+                self.model_manager.num_partitions = int(response.num_partitions)
+                self.num_partitions = int(response.num_partitions)
 
                 if response.layer is None:
                     raise Exception(
@@ -282,6 +344,10 @@ class Miner(BaseNeuron, HealthServerMixin):
                 logger.debug(f"Run flags for miner {self.hotkey[:8]}: {RUN_FLAGS}")
                 return response.model_cfg.model_dump(), response.model_metadata.model_dump()
 
+            except RunFullException as e:
+                logger.warning(f"Run is full for miner {self.hotkey[:8]}: {e}")
+                await asyncio.sleep(60)
+                continue
             except SpecVersionException as e:
                 logger.error(f"Spec version mismatch: {e}")
                 raise
@@ -298,9 +364,10 @@ class Miner(BaseNeuron, HealthServerMixin):
             SubmittedWeightsError: If the weights are not submitted successfully
             e: If there is an error submitting the weights
         """
-        async with TimerLogger(
+        async with TimerLoggerMiner(
             name="submit_weights",
             metadata={"hotkey": self.hotkey[:8], "layer": self.state_manager.layer},
+            hotkey=self.hotkey[:8],
         ):
             if self.training_phase.backwards_since_reset == 0:
                 logger.warning(f"Backwards since reset for miner {self.hotkey[:8]} is 0, skipping")
@@ -444,6 +511,11 @@ class Miner(BaseNeuron, HealthServerMixin):
                 except Exception as e:
                     logger.error(f"Failed to stop health server: {e}")
 
+                try:
+                    self._stop_visualization_server_process()
+                except Exception as e:
+                    logger.error(f"Failed to stop visualization server: {e}")
+
             except Exception as e:
                 logger.error(f"Failed to shutdown miner: {e}")
 
@@ -462,7 +534,9 @@ class Miner(BaseNeuron, HealthServerMixin):
 
         old_run_id = self.state_manager.run_id
         old_layer = self.state_manager.layer
+
         await self.training_phase.reset()
+
         # We provide the model config and metadata so that all miners are aligned.
         model_config, model_metadata = await self.register_loop()
 
@@ -526,9 +600,10 @@ class Miner(BaseNeuron, HealthServerMixin):
         Returns:
             list[Partition]: The merged partitions
         """
-        async with TimerLogger(
+        async with TimerLoggerMiner(
             name="merge_partitions",
             metadata={"hotkey": self.hotkey[:8], "layer": self.state_manager.layer},
+            hotkey=self.hotkey[:8],
         ):
             filtered_metadata: dict[str, dict[int, dict[str, ChunkMetadata]]] = await filter_bad_metadata(
                 partitions=partitions, submitted_weights_and_optimizers=weight_path_per_layer
