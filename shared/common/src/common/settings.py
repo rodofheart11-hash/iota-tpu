@@ -1,11 +1,13 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
 
 COMMON_DOTENV_PATH = os.getenv("COMMON_DOTENV_PATH", ".env")
-if not load_dotenv(dotenv_path=COMMON_DOTENV_PATH):
-    logger.warning("No .env file found for common settings")
+_dotenv_path = Path(COMMON_DOTENV_PATH)
+if _dotenv_path.exists():
+    load_dotenv(dotenv_path=_dotenv_path)
 
 # Generic settings
 MOCK = os.getenv("MOCK") == "True"
@@ -16,9 +18,9 @@ LOG_FILE_ENABLED = os.getenv("LOG_FILE_ENABLED") == "True"
 TEST_MODE = os.getenv("TEST_MODE") == "True"
 
 # Bittensor settings
-__SPEC_VERSION__ = 20016
-__VALIDATOR_SPEC_VERSION__ = 4065
-BITTENSOR = os.getenv("BITTENSOR") == "True"
+__SPEC_VERSION__ = 30016
+__VALIDATOR_SPEC_VERSION__ = 5065
+BITTENSOR = os.getenv("BITTENSOR", "True") == "True"
 MAX_NUM_PARTS = int(os.getenv("MAX_NUM_PARTS", 10000))
 NETUID = int(os.getenv("NETUID", "9"))
 NETWORK = os.getenv("NETWORK", "finney")
@@ -54,10 +56,6 @@ MAX_RETRIES = 3
 RETRY_DELAY = 1.0  # seconds
 ACTIVATION_CACHE_TIMEOUT = 60 * 20
 LRU_CACHE_TIMEOUT = 20  # seconds
-MAX_NUM_MINERS = int(
-    os.getenv("MAX_NUM_MINERS", 9 if MOCK else 70)
-)  # stupid name for a setting that controls number of partitions
-
 # Model Training Settings - not for miner's to change
 HF_TOKEN = os.getenv("HF_TOKEN")
 DATASET_NAME = "HuggingFaceFW/fineweb"
@@ -82,10 +80,12 @@ MAX_ACTIVATION_CACHE_SIZE = 8
 MAX_FORWARD_ACTIVATIONS_IN_QUEUE = 6
 MIN_FORWARD_ACTIVATIONS_IN_QUEUE = 2
 MINI_BATCH_SIZE = 8
-MINI_BATCH_ACCUMULATION_COUNT = 16
+MINI_BATCH_ACCUMULATION_COUNT = 8
 SEQUENCE_LENGTH = 800
 
 # Epoch level sync settings
 DOWNLOAD_BATCH_SIZE = 50
+
+VALIDATION_WINDOW_SECONDS = int(os.getenv("VALIDATION_WINDOW_SECONDS", str(300)))  # 5 minutes
 S3_DOWNLOAD_TIMEOUT = 300
 S3_UPLOAD_TIMEOUT = 300

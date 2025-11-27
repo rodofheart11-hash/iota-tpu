@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from common.models.run_flags import RUN_FLAGS
-from common.utils.timer_logger import TimerLogger
+from miner.utils.timer_logger import TimerLoggerMiner
 import torch
 from loguru import logger
 import asyncio
@@ -17,6 +19,8 @@ from subnet.miner_api_client import MinerAPIClient
 from subnet.model.model_mixin import ModelManager
 from subnet.model.utils import compute_loss, log_gpu_memory_usage
 from subnet.model import gpu_device
+
+from miner.pool.stats import StatsTracker
 
 
 class TrainingPhase:
@@ -37,9 +41,16 @@ class TrainingPhase:
             activation_cache=self._cache,
         )
         self._publisher = ActivationPublisher(miner_api_client=self._miner_api_client)
+        self._stats_tracker: StatsTracker | None = None
         self.backwards_since_reset = 0
         self.backwards_since_last_optim = 0
         self.local_optimization_steps = 0
+
+    def attach_stats_tracker(self, tracker: StatsTracker | None) -> None:
+        """Attach a stats tracker and propagate to child components."""
+        self._stats_tracker = tracker
+        self._queue.attach_stats_tracker(tracker)
+        self._publisher.attach_stats_tracker(tracker)
 
     async def run(self):
         try:
@@ -48,6 +59,11 @@ class TrainingPhase:
             last_activation_time = time.time()
             while True:
                 await asyncio.sleep(0.01)  # yield control back to the event loop
+                if self._stats_tracker is not None:
+                    self._stats_tracker.set_phase(self._miner_api_client.layer_state)
+                    self._stats_tracker.set_layer(self._state_manager.layer)
+                    self._stats_tracker.set_local_epoch(getattr(self._model_manager, "epoch_counter", None))
+
                 # Check if training phase is complete
                 await self._queue.check_if_training_is_complete()
 
@@ -97,14 +113,17 @@ class TrainingPhase:
             f"Forward pass for activation {activation_data.activation_id} on layer {self._state_manager.layer}"
         )
         with logger.contextualize(cache_size=len(self._cache)):
-            async with TimerLogger(
+            async with TimerLoggerMiner(
                 name="forward",
                 metadata={
                     "hotkey": self._hotkey[:8],
                     "activation_id": activation_data.activation_id,
                     "layer": self._state_manager.layer,
                 },
+                hotkey=self._hotkey[:8],
             ):
+                if self._stats_tracker is not None:
+                    self._stats_tracker.record_forward()
                 logger.info(
                     f"🚀 Starting FORWARD pass for layer {self._state_manager.layer} | Processing activation {activation_data.activation_id} | Miner: {self._hotkey[:8]}"
                 )
@@ -166,9 +185,13 @@ class TrainingPhase:
         Performs the backward pass.
         """
         with logger.contextualize(cache_size=len(self._cache)):
-            async with TimerLogger(
-                name="backward", metadata={"hotkey": self._hotkey[:8], "activation_id": activation_data.activation_id}
+            async with TimerLoggerMiner(
+                name="backward",
+                metadata={"hotkey": self._hotkey[:8], "activation_id": activation_data.activation_id},
+                hotkey=self._hotkey[:8],
             ):
+                if self._stats_tracker is not None:
+                    self._stats_tracker.record_backward()
                 last_layer = self._state_manager.layer == self._model_manager.model_metadata["n_splits"] - 1
                 all_input_activations_grads = []
                 losses = []
@@ -179,7 +202,7 @@ class TrainingPhase:
                     logger.info(
                         f"🔄 Starting BACKWARD pass for activation {activation_data.activation_id} | Layer: {self._state_manager.layer} | Miner: {self._hotkey[:8]}"
                     )
-                    async with TimerLogger(name="moving to gpu"):
+                    async with TimerLoggerMiner(name="moving to gpu", hotkey=self._hotkey[:8]):
                         log_gpu_memory_usage(note="starting training backward pass")
 
                         # Check if activation is in cache
@@ -252,7 +275,7 @@ class TrainingPhase:
                             return
 
                     logger.debug(f"State: {state}")
-                    async with TimerLogger(name="backward pass"):
+                    async with TimerLoggerMiner(name="backward pass", hotkey=self._hotkey[:8]):
                         await self._model_manager._backward(
                             layer=self._state_manager.layer,
                             output_activations=output_activations_gpu,
@@ -286,15 +309,17 @@ class TrainingPhase:
                     log_gpu_memory_usage(note="after moving input activation grads to GPU")
                     all_input_activations_grads.append(input_activation_grads)
 
-                async with TimerLogger(name="publishing_backwards"):
+                async with TimerLoggerMiner(name="publishing_backwards", hotkey=self._hotkey[:8]):
                     logger.debug(f"Backwards since reset for miner {self._hotkey[:8]}: {self.backwards_since_reset}")
 
                     logger.debug(f"All input activations grads shape: {len(all_input_activations_grads)}")
                     self.backwards_since_reset += 1
+                    mean_loss: float | None = None
                     if losses:
-                        self._publisher.publish_loss(
-                            loss=torch.mean(torch.tensor(losses)), activation_id=activation_data.activation_id
-                        )
+                        mean_loss = sum(losses) / len(losses)
+                        self._publisher.publish_loss(loss=mean_loss, activation_id=activation_data.activation_id)
+                        if self._stats_tracker is not None:
+                            self._stats_tracker.record_loss(mean_loss)
                     self._publisher.publish_activation(
                         tensor=torch.cat(all_input_activations_grads, dim=0),
                         activation_id=activation_data.activation_id,
@@ -304,7 +329,7 @@ class TrainingPhase:
                         activation_path=activation_data.activation_upload_path,
                     )
 
-                async with TimerLogger(name="cleaning up cache"):
+                async with TimerLoggerMiner(name="cleaning up cache", hotkey=self._hotkey[:8]):
                     # Cleanup cache
                     del self._cache[activation_data.activation_id]
 
@@ -335,19 +360,23 @@ class TrainingPhase:
                             f"✅ Successfully completed BACKWARD pass for activation {activation_data.activation_id} | Layer: {self._state_manager.layer} | Miner: {self._hotkey[:8]}"
                         )
 
+                if self._stats_tracker is not None:
+                    self._stats_tracker.set_local_epoch(getattr(self._model_manager, "epoch_counter", None))
+
     async def compute_last_layer_loss(
         self, activation_data: ActivationData, logits: torch.Tensor, targets: torch.Tensor
     ) -> torch.Tensor:
         """
         Performs the backward pass for the last layer.
         """
-        async with TimerLogger(
+        async with TimerLoggerMiner(
             name="compute_last_layer_loss",
             metadata={
                 "hotkey": self._hotkey[:8],
                 "activation_id": activation_data.activation_id,
                 "layer": self._state_manager.layer,
             },
+            hotkey=self._hotkey[:8],
         ):
             # NOTE: targets are on the CPU at this point
             # the problem is that loss calculation is very heavy on the GPU memory

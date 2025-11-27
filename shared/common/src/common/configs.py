@@ -56,7 +56,7 @@ LLAMA32_CONFIG_1B = {
     },
     "model_splits": [[-1, 5], [5, 10], [10, -1]],
     # "model_splits": [[-1, 2], [2, 6], [6, 10], [10, 14], [14, -1]],
-    "miners_per_layer": [1, 1, 3],
+    "miners_per_layer": [1, 1, 1],
     "s3_download_timeout": 300,
     "s3_upload_timeout": 300,
     "activation_timeout": 60,

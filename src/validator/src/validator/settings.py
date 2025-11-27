@@ -12,7 +12,7 @@ DEVICE = os.getenv("DEVICE", "cpu")
 
 # WEIGHT_SUBMIT_INTERVAL: int = 3600  # submit weight every 1 hour
 WEIGHT_SUBMIT_INTERVAL: int = 10 if (MOCK or not BITTENSOR) else 60 * 21  # submit weight every 21 minutes
-FETCH_TASKS_INTERVAL: int = 5 if (MOCK or not BITTENSOR) else 60 * 5  # fetch tasks every 5 minutes
+FETCH_TASKS_INTERVAL: int = 5 if (MOCK or not BITTENSOR) else 60  # fetch tasks every 5 minutes
 ORCHESTRATOR_HEALTH_CHECK_INTERVAL: int = 60  # check orchestrator health every 1 minute
 
 # Validation Thresholds
@@ -28,3 +28,23 @@ VALIDATOR_HEALTH_ENDPOINT = os.getenv("VALIDATOR_HEALTH_ENDPOINT", "/health")
 
 WALLET_NAME = os.getenv("wallet_name", "test")
 WALLET_HOTKEY = os.getenv("wallet_hotkey", "m1")
+
+## Detector settings ##
+
+# List of active detector functions (by function name)
+ACTIVE_DETECTORS: list[str] = [
+    "quantile_detector",
+    "rank_z_score_detector",
+]
+
+# Default parameters for each detector function
+DETECTOR_DEFAULT_PARAMS: dict[str, dict] = {
+    "quantile_detector": {
+        "lower_quantile": 0.05,
+        "upper_quantile": 0.95,
+        "symmetric": True,
+    },
+    "rank_z_score_detector": {
+        "z_threshold": 3.0,
+    },
+}

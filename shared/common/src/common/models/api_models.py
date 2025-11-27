@@ -63,6 +63,7 @@ class MinerRegistrationResponse(BaseModel):
     model_metadata: ModelMetadata | None = None
     run_id: str
     run_flags: RunFlags
+    num_partitions: int
 
 
 class ValidatorRegistrationResponse(BaseModel):
@@ -102,16 +103,16 @@ class SubmittedWeightsAndOptimizerPresigned(BaseModel):
 
 #### Validator related models
 class ValidationTaskResponse(BaseModel):
-    task_type: str
-    success: bool
-    score: float
-    reason: str | None = None
-    run_id: str | None = "default"
-    epoch: int | None = -1
-    layer_idx: int | None = -1
+    task_result_id: int
+    task_type: str  # validation_scoring, validation_detection
+    function_name: str
+    inputs: dict
+    outputs: dict
 
 
 class ValidatorTask(BaseModel):
+    task_result_id: int
+    task_type: str  # validation_scoring, validation_detection
     function_name: str
     inputs: dict
 
@@ -145,8 +146,12 @@ class MinerScore(BaseModel):
     uid: int
     hotkey: str
 
+    coldkey: str | None = None
     # Assigned run_id
-    run_id: str
+    run_id: str | None = None
+
+    # The raw score for the miner sum(scores within time window)
+    raw_score: float
 
     # The score for the given time window for this run
     # Calculated by: sum(scores within time window) * multipler
@@ -171,7 +176,7 @@ class RunIncentiveAllocation(BaseModel):
 
     # Percentage of incentive allocated for this run
     # Calculated by: incentive_weight / total_incentive_weight
-    incentive_perc: float | None = None
+    incentive_normalized: float | None = None
 
     # How much of the allocated incentive is burned for this run
     burn_factor: float
@@ -217,6 +222,11 @@ class RegisterMinerRequest(BaseModel):
     run_id: str
     attestation: MinerAttestationPayload | None = None
     coldkey: str | None = None
+    register_as_metagraph_miner: bool = True
+
+
+class PayoutColdkeyRequest(BaseModel):
+    payout_coldkey: str
 
 
 class RunInfo(BaseModel):
@@ -224,7 +234,9 @@ class RunInfo(BaseModel):
     is_default: bool
     num_miners: int
     whitelisted: bool
+    is_miner_pool: bool
     burn_factor: float
     incentive_perc: float
     authorized: bool
     run_flags: RunFlags
+    max_miners: int

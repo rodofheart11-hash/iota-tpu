@@ -1,8 +1,6 @@
 from datetime import datetime
 from typing import Optional
 import bittensor as bt
-from common import settings as common_settings
-from common.utils.formulas import calculate_n_partitions
 import torch
 from loguru import logger
 
@@ -63,8 +61,6 @@ class BaseNeuron:
             )
 
             # this is a deterministic number based on the config.
-            n_miners_per_layer = (common_settings.MAX_NUM_MINERS // self.model_manager.model_metadata["n_splits"]) + 1
-            self.num_partitions = calculate_n_partitions(n_miners=n_miners_per_layer)
             logger.info(f"Number of partitions used for butterfly-reduce: {self.num_partitions}")
 
         except Exception as e:

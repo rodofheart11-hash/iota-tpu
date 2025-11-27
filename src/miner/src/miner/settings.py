@@ -6,8 +6,40 @@ from common import settings as common_settings
 
 
 DOTENV_PATH = os.getenv("DOTENV_PATH", ".env")
-if not load_dotenv(dotenv_path=DOTENV_PATH):
-    logger.warning("No .env file found for miner settings")
+load_dotenv(dotenv_path=DOTENV_PATH)
+
+
+def detect_device() -> str:
+    """Detect the most capable torch device available on the host."""
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover - torch import failure on non-runtime environments
+        logger.debug(f"Unable to import torch for device detection: {exc}")
+        return "cpu"
+
+    if torch.cuda.is_available():
+        return "cuda"
+
+    mps_backend = getattr(torch, "backends", None)
+    if mps_backend is not None:
+        mps = getattr(mps_backend, "mps", None)
+        if mps is not None and mps.is_available():
+            return "mps"
+
+    mps_module = getattr(torch, "mps", None)
+    if mps_module is not None:
+        is_available = getattr(mps_module, "is_available", None)
+        if callable(is_available) and is_available():
+            return "mps"
+
+    return "cpu"
+
+
+def set_device(device: str) -> None:
+    """Update the global torch device selection."""
+    global DEVICE
+    DEVICE = device
+    os.environ["DEVICE"] = device
 
 
 # Wallet
@@ -20,7 +52,8 @@ MINER_HEALTH_ENDPOINT = os.getenv("MINER_HEALTH_ENDPOINT", "/health")
 
 LAUNCH_HEALTH = os.getenv("LAUNCH_HEALTH") == "True"
 
-DEVICE = os.getenv("DEVICE", "cpu")
+DEVICE = os.getenv("DEVICE") or detect_device()
+os.environ.setdefault("DEVICE", DEVICE)
 
 # Training settings
 TIMEOUT = int(os.getenv("MINER_TIMEOUT", "300"))  # 5 minutes default
@@ -37,8 +70,12 @@ MIN_FORWARD_ACTIVATIONS_IN_QUEUE = int(
     os.getenv("MIN_FORWARD_ACTIVATIONS_IN_QUEUE", common_settings.MIN_FORWARD_ACTIVATIONS_IN_QUEUE)
 )
 
+
+VISUALIZATION_API_URL = os.getenv("VISUALIZATION_API_URL", "http://localhost:8009")
+VISUALIZATION_AUTO_OPEN = os.getenv("VISUALIZATION_AUTO_OPEN", "true").lower() in ("1", "true", "yes", "on")
+
 # Training settings
 LOCAL_BATCH_SIZE = int(
-    os.getenv("LOCAL_BATCH_SIZE", "2")
+    os.getenv("LOCAL_BATCH_SIZE", "8")
 )  # Splits the minibatch further into even smaller local batches to avoid running out of memory
 PSEUDO_GRADIENTS_BATCH_SIZE = int(os.getenv("PSEUDO_GRADIENTS_BATCH_SIZE", "100"))

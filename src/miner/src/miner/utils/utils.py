@@ -9,8 +9,7 @@ from common.utils.cache import async_lru
 from common.utils.exceptions import LayerStateException, NanInfException
 from common.utils.formulas import calculate_num_parts
 from common.utils.shared_states import LayerPhase
-from common.utils.timer_logger import TimerLogger
-from subnet.utils.vector_utils import check_for_nans_and_infs
+from miner.utils.timer_logger import TimerLoggerMiner
 import torch
 from bittensor_wallet import Keypair
 from common import settings as common_settings
@@ -22,6 +21,7 @@ from common.models.api_models import (
 )
 from common.utils.s3_utils import download_file
 from loguru import logger
+from subnet.utils.vector_utils import check_for_nans_and_infs
 from subnet.miner_api_client import MinerAPIClient
 from common.models.run_flags import RUN_FLAGS
 
@@ -256,7 +256,9 @@ async def upload_tensor(
         if existing_upload_urls:
             logger.debug(f"Using already provided upload URL for {file_type} tensor")
         else:
-            async with TimerLogger(name="initiate_activation_upload", metadata={"file_type": file_type}):
+            async with TimerLoggerMiner(
+                name="initiate_activation_upload", metadata={"file_type": file_type}, hotkey=hotkey.ss58_address[:8]
+            ):
                 initiate_response: FileUploadResponse | dict = await miner_api_client.initiate_file_upload_request(
                     hotkey=hotkey,
                     file_upload_request=FileUploadRequest(
@@ -271,7 +273,9 @@ async def upload_tensor(
                 raise Exception("Error initiating file upload")
 
         # Upload data to presigned urls
-        async with TimerLogger(name="upload_multipart_to_s3", metadata={"file_type": file_type}):
+        async with TimerLoggerMiner(
+            name="upload_multipart_to_s3", metadata={"file_type": file_type}, hotkey=hotkey.ss58_address[:8]
+        ):
             logger.debug(f"Uploading tensor {file_type} to presigned urls: {upload_urls}")
             parts: list[dict] | None = await MinerAPIClient.upload_to_s3(
                 urls=upload_urls, data=payload, upload_id=upload_id
@@ -279,7 +283,9 @@ async def upload_tensor(
 
         # for multipart uploads, we need to manually complete the upload request
         if multipart:
-            async with TimerLogger(name="complete_file_upload_request", metadata={"file_type": file_type}):
+            async with TimerLoggerMiner(
+                name="complete_file_upload_request", metadata={"file_type": file_type}, hotkey=hotkey.ss58_address[:8]
+            ):
                 await miner_api_client.complete_file_upload_request(
                     hotkey=hotkey,
                     file_upload_completion_request=FileUploadCompletionRequest(

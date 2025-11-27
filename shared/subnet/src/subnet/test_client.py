@@ -7,10 +7,12 @@ from bittensor.utils import Keypair
 
 class TestAPIClient:
     @classmethod
-    async def register_to_metagraph(cls, hotkey: Keypair, role: Literal["miner", "validator"] = "miner"):
+    async def register_to_metagraph(cls, hotkey: Keypair | str, role: Literal["miner", "validator"] = "miner"):
+        if isinstance(hotkey, Keypair):
+            hotkey = hotkey.ss58_address
         response = requests.post(
             url=f"{common_settings.ORCHESTRATOR_SCHEMA}://{common_settings.ORCHESTRATOR_HOST}:{common_settings.ORCHESTRATOR_PORT}/test_endpoints/add_entity_to_metagraph",
-            params={"hotkey": hotkey.ss58_address, "role": role},
+            params={"hotkey": hotkey, "role": role},
         )
         if response.status_code != 200:
             raise Exception(f"Error registering miner to metagraph: {response.text}")

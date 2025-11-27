@@ -10,11 +10,18 @@ from common.utils.s3_utils import filter_exceptions
 from common.utils.partitions import get_start_and_end_indices
 from pydantic import BaseModel
 import torch
+from platformdirs import user_data_dir
 
 
 from loguru import logger
 from subnet.utils.vector_utils import check_for_nans_and_infs
 from subnet.utils.s3_torch import download_tensor
+
+
+def get_data_dir():
+    APP_NAME = "IOTA Train at Home"
+    data_dir = user_data_dir(APP_NAME, "Macrocosmos")
+    return data_dir
 
 
 class MergingPartition(BaseModel):
@@ -204,18 +211,20 @@ def delete_saved_model_weights_and_optimizer_state(hotkey: str) -> None:
     This is useful to ensure we only keep a single snapshot per run/layer to avoid
     accumulating files across epochs.
     """
+    data_dir = get_data_dir()
+
     try:
-        if not os.path.exists("./weights"):
+        if not os.path.exists(os.path.join(data_dir, "weights")):
             return
 
         hotkey_prefix = hotkey[:8]
-        for file in list(os.listdir("./weights")):
+        for file in list(os.listdir(os.path.join(data_dir, "weights"))):
             # Delete any old snapshots for this hotkey regardless of prior run/layer to avoid disk bloat
             if file.startswith(f"current_model_weights_{hotkey_prefix}_") or file.startswith(
                 f"current_model_optimizer_state_dict_{hotkey_prefix}_"
             ):
                 try:
-                    os.remove(f"./weights/{file}")
+                    os.remove(f"{data_dir}/weights/{file}")
                 except Exception as e:
                     logger.warning(f"Failed to delete file during cleanup {file}: {e}")
     except Exception as e:
@@ -227,9 +236,11 @@ def save_model_weights_and_optimizer_state(
 ):
     """Saves the model weights and optimizer state to the weights directory."""
 
+    data_dir = get_data_dir()
     logger.debug(f"Saving model weights and optimizer state for hotkey {hotkey[:8]}")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs("./weights", exist_ok=True)
+    os.makedirs(os.path.join(data_dir, "weights"), exist_ok=True)
+    weights_path = os.path.join(data_dir, "weights")
 
     model_suffix = _model_suffix(hotkey=hotkey, run_id=run_id, layer_idx=layer_idx)
     try:
@@ -237,8 +248,8 @@ def save_model_weights_and_optimizer_state(
         delete_saved_model_weights_and_optimizer_state(hotkey=hotkey)
 
         # First, save the new files
-        new_weights_file = f"./weights/current_model_weights_{model_suffix}_{timestamp}.pt"
-        new_optimizer_file = f"./weights/current_model_optimizer_state_dict_{model_suffix}_{timestamp}.pt"
+        new_weights_file = f"{data_dir}/weights/current_model_weights_{model_suffix}_{timestamp}.pt"
+        new_optimizer_file = f"{data_dir}/weights/current_model_optimizer_state_dict_{model_suffix}_{timestamp}.pt"
 
         # Always persist on CPU to keep files portable and smaller
         cpu_weights = model_weights.detach().to("cpu") if isinstance(model_weights, torch.Tensor) else model_weights
@@ -254,17 +265,22 @@ def save_model_weights_and_optimizer_state(
             logger.warning(f"Optimizer state file not able to be saved: {new_optimizer_file}")
             # raise Exception(f"Optimizer state file not able to be saved: {new_optimizer_file}")
 
-        logger.debug(f"Model weights and optimizer state files after cleanup: {os.listdir('./weights')}")
+        logger.debug(f"Model weights and optimizer state files after cleanup: {os.listdir(weights_path)}")
 
     except Exception as e:
         logger.exception(f"Error saving model weights and optimizer state: {e}")
 
 
 def get_model_weight_path(hotkey: str, run_id: str, layer_idx: int) -> str:
+    data_dir = get_data_dir()
+
+    weights_path = os.path.join(data_dir, "weights")
     model_suffix = _model_suffix(hotkey=hotkey, run_id=run_id, layer_idx=layer_idx)
 
-    logger.debug(f"All potential model weights files: {os.listdir('./weights')}")
-    weight_path = [f for f in os.listdir("./weights") if f"current_model_weights_{model_suffix}" in f]
+    logger.debug(f"All potential model weights files: {os.listdir(weights_path)}")
+    weight_path = [
+        f for f in os.listdir(os.path.join(data_dir, "weights")) if f"current_model_weights_{model_suffix}" in f
+    ]
 
     if not weight_path:
         raise Exception(
@@ -272,7 +288,7 @@ def get_model_weight_path(hotkey: str, run_id: str, layer_idx: int) -> str:
         )
 
     # Load the most recent snapshot (lexicographically by timestamp or by mtime)
-    weight_path = sorted(weight_path, key=lambda f: os.path.getmtime(f"./weights/{f}"))
+    weight_path = sorted(weight_path, key=lambda f: os.path.getmtime(f"{data_dir}/weights/{f}"))
     latest_weight_file = weight_path[-1]
     logger.debug(f"Loading model weights from ./weights/{latest_weight_file}")
     return latest_weight_file
@@ -280,9 +296,11 @@ def get_model_weight_path(hotkey: str, run_id: str, layer_idx: int) -> str:
 
 def load_model_weights(hotkey: str, run_id: str, layer_idx: int) -> torch.Tensor:
     """Loads the model weights from the weights directory and returns them on the CPU."""
+    data_dir = get_data_dir()
+
     try:
         latest_weight_file = get_model_weight_path(hotkey=hotkey, run_id=run_id, layer_idx=layer_idx)
-        model_weights = torch.load(f"./weights/{latest_weight_file}", map_location="cpu", mmap=True)
+        model_weights = torch.load(f"{data_dir}/weights/{latest_weight_file}", map_location="cpu", mmap=True)
 
         if model_weights is None:
             raise Exception(f"Torch load failed for model weights file {latest_weight_file}")
@@ -296,31 +314,36 @@ def load_model_weights(hotkey: str, run_id: str, layer_idx: int) -> torch.Tensor
 
 def load_model_weights_and_optimizer_state(hotkey: str, run_id: str, layer_idx: int) -> tuple[torch.Tensor, dict]:
     """Loads the model weights and optimizer state from the weights directory."""
+    data_dir = get_data_dir()
 
     try:
         model_suffix = _model_suffix(hotkey=hotkey, run_id=run_id, layer_idx=layer_idx)
-        weight_path = [f for f in os.listdir("./weights") if f"current_model_weights_{model_suffix}" in f]
+        weight_path = [
+            f for f in os.listdir(os.path.join(data_dir, "weights")) if f"current_model_weights_{model_suffix}" in f
+        ]
         optimizer_state_path = [
-            f for f in os.listdir("./weights") if f"current_model_optimizer_state_dict_{model_suffix}" in f
+            f
+            for f in os.listdir(os.path.join(data_dir, "weights"))
+            if f"current_model_optimizer_state_dict_{model_suffix}" in f
         ]
         if not weight_path or not optimizer_state_path:
             raise Exception(f"Model weights and optimizer state files not found for {model_suffix}")
 
         # Select the latest snapshot for both weights and optimizer state
-        weight_path = sorted(weight_path, key=lambda f: os.path.getmtime(f"./weights/{f}"))
-        optimizer_state_path = sorted(optimizer_state_path, key=lambda f: os.path.getmtime(f"./weights/{f}"))
+        weight_path = sorted(weight_path, key=lambda f: os.path.getmtime(f"{data_dir}/weights/{f}"))
+        optimizer_state_path = sorted(optimizer_state_path, key=lambda f: os.path.getmtime(f"{data_dir}/weights/{f}"))
 
         latest_weight_file = weight_path[-1]
         latest_optimizer_file = optimizer_state_path[-1]
 
         logger.debug(f"Loading model weights and optimizer state for hotkey {hotkey[:8]}")
-        model_weights = torch.load(f"./weights/{latest_weight_file}", map_location="cpu")
-        optimizer_state_dict = torch.load(f"./weights/{latest_optimizer_file}", map_location="cpu")
+        model_weights = torch.load(f"{data_dir}/weights/{latest_weight_file}", map_location="cpu")
+        optimizer_state_dict = torch.load(f"{data_dir}/weights/{latest_optimizer_file}", map_location="cpu")
 
         return model_weights, optimizer_state_dict
 
     except Exception as e:
-        if not os.path.exists("./weights"):
+        if not os.path.exists(os.path.join(data_dir, "weights")):
             logger.info("📂 Weights directory doesn't exist, creating it to save model weights and optimizer states!")
         else:
             logger.warning(

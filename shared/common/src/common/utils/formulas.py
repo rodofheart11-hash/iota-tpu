@@ -2,9 +2,8 @@ import math
 from common import settings as common_settings
 
 
-def calculate_n_partitions(n_miners: int) -> int:
+def calculate_n_partitions(n_miners: int, n_splits: int) -> int:
     """Calculate the number of partitions for a given number of miners.
-    #TODO: 5x but maybe needs more thinking.
 
     Args:
         n_miners (int): The number of miners.
@@ -12,8 +11,7 @@ def calculate_n_partitions(n_miners: int) -> int:
     Returns:
         int: The number of partitions.
     """
-    # return int(max(1, n_miners * (n_miners - 1) / 2))
-    return n_miners * 5
+    return (n_miners // n_splits) * 2
 
 
 def calculate_num_parts(data: bytes) -> int:

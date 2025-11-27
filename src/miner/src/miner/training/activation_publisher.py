@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 from loguru import logger
-from common.utils.timer_logger import TimerLogger
+from miner.utils.timer_logger import TimerLoggerMiner
 import torch
 
 from common.models.api_models import (
@@ -16,11 +18,18 @@ from miner.utils.attestation_utils import AttestationUnavailableError, collect_a
 from miner.utils.utils import upload_tensor
 from subnet.miner_api_client import MinerAPIClient
 
+from miner.pool.stats import StatsTracker, tensor_num_bytes
+
 
 class ActivationPublisher:
     def __init__(self, miner_api_client: MinerAPIClient):
         self._miner_api_client = miner_api_client
         self._publishing_tasks: list[asyncio.Task] = []
+        self._stats_tracker: StatsTracker | None = None
+
+    def attach_stats_tracker(self, tracker: StatsTracker | None) -> None:
+        """Attach a stats tracker for dashboard metrics."""
+        self._stats_tracker = tracker
 
     def publish_activation(
         self,
@@ -60,12 +69,13 @@ class ActivationPublisher:
     ):
         """Upload an activation to the orchestrator."""
         try:
-            async with TimerLogger(
+            async with TimerLoggerMiner(
                 name="upload_activation",
                 metadata={
                     "activation_id": activation_id,
                     "direction": direction,
                 },
+                hotkey=self._miner_api_client.hotkey.ss58_address[:8],
             ):
                 upload_response: CompleteFileUploadResponse = await upload_tensor(
                     miner_api_client=self._miner_api_client,
@@ -75,6 +85,9 @@ class ActivationPublisher:
                     object_name=activation_path,
                 )
                 logger.debug(f"tensor shape before upload:{tensor.shape}")
+                if self._stats_tracker is not None:
+                    bytes_uploaded = tensor_num_bytes(tensor)
+                    self._stats_tracker.record_upload(bytes_uploaded)
 
                 attestation_payload: MinerAttestationPayload | None = None
                 if RUN_FLAGS.attest.isOn():
@@ -98,9 +111,10 @@ class ActivationPublisher:
                             f"Error collecting attestation for activation {activation_id}: {exc}",
                         )
 
-            async with TimerLogger(
+            async with TimerLoggerMiner(
                 name="submit_activation",
                 metadata={"activation_id": activation_id, "direction": direction},
+                hotkey=self._miner_api_client.hotkey.ss58_address[:8],
             ):
                 await self._miner_api_client.submit_activation_request(
                     submit_activation_request=SubmitActivationRequest(
@@ -123,9 +137,10 @@ class ActivationPublisher:
     async def _publish_loss(self, loss: float, activation_id: str):
         """Report a loss to the orchestrator."""
         try:
-            async with TimerLogger(
+            async with TimerLoggerMiner(
                 name="publish_loss",
                 metadata={"activation_id": activation_id},
+                hotkey=self._miner_api_client.hotkey.ss58_address[:8],
             ):
                 await self._miner_api_client.report_loss(
                     loss_report=LossReportRequest(activation_id=activation_id, loss=loss),
