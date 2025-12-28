@@ -8,6 +8,7 @@ from loguru import logger
 from subnet.model.loaders import load_model_split
 from subnet.model.tokenizer import load_tokenizer
 from subnet.model.utils import _clean_gpu_memory, log_gpu_memory_usage
+from subnet.model import gpu_device
 from subnet.utils.vector_utils import add_artificial_gradients, check_for_nans_and_infs
 
 
@@ -132,6 +133,9 @@ class ModelManager:
 
             output_activations, state = self.model(input_activations)
 
+            # Mark step for XLA/TPU execution
+            gpu_device.mark_step()
+
             logger.info(
                 f"output activations with shape {output_activations.shape} for {self.logger_attributes['hotkey'][:8]} on layer {layer}"
             )
@@ -203,6 +207,9 @@ class ModelManager:
                     logger.error(f"Error during backward step: {e}")
                     raise
 
+            # Mark step for XLA/TPU execution
+            gpu_device.mark_step()
+
             log_gpu_memory_usage(note="after backward pass")
 
     async def clip_gradients(self):
@@ -273,12 +280,13 @@ class ModelManager:
             # the bottleneck dynamically changes it size based on the input data.
             if layer > 0:
                 logger.success(f"Populating bottleneck decoder for layer {layer}")
+                device = gpu_device.to_device(self.device)
                 blank_tensor = torch.zeros(
                     1,
                     common_settings.SEQUENCE_LENGTH,
                     self.model_config["bottleneck_dim"] or self.model_config["emb_dim"],
                     dtype=self.model_config["dtype"],
-                ).to(self.device)
+                ).to(device)
 
                 self.model.forward(blank_tensor)
 
@@ -317,7 +325,7 @@ class ModelManager:
         )
 
         add_artificial_gradients(model=self.model, device=self.device)
-        self.optimizer.step()
+        gpu_device.optimizer_step(self.optimizer)
         self.optimizer.zero_grad()
 
         logger.info(
@@ -355,9 +363,12 @@ class ModelManager:
             self.optimizer.param_groups[0]["lr"] = learning_rate
             logger.debug(f"Stepping optimizer for miner {self.logger_attributes['hotkey'][:8]}")
 
-            # Step and zero the gradients
-            self.optimizer.step()
+            # Step and zero the gradients (uses XLA-compatible step for TPU)
+            gpu_device.optimizer_step(self.optimizer)
             self.optimizer.zero_grad()
+
+            # Mark step for XLA/TPU execution
+            gpu_device.mark_step()
 
             log_gpu_memory_usage(note="after stepping optimizer")
 

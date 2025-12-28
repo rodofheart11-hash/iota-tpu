@@ -59,17 +59,31 @@ def is_gpu_available() -> bool:
 def get_device() -> torch.device:
     """Get a torch.device object for the best available device."""
     device_str = get_available_device()
+    return to_device(device_str)
 
+
+def to_device(device_str: str) -> torch.device:
+    """Convert a device string to a torch.device object.
+
+    Handles special cases like XLA/TPU and DirectML that require
+    specific initialization.
+
+    Args:
+        device_str: Device string like 'cuda', 'xla', 'mps', 'cpu', etc.
+
+    Returns:
+        A torch.device object for the specified device.
+    """
     if device_str == "xla":
         try:
-            import torch_xla.core.xla_model as xm  # noqa: F401
+            import torch_xla.core.xla_model as xm
 
             return xm.xla_device()
         except ImportError:
             return torch.device("cpu")
     elif device_str == "dml":
         try:
-            import torch_directml  # noqa: F401
+            import torch_directml
 
             return torch_directml.device()
         except ImportError:
@@ -112,6 +126,43 @@ def synchronize():
             pass
     else:
         pass
+
+
+def mark_step():
+    """Mark a step for XLA/TPU execution.
+
+    On TPUs, operations are traced lazily and only executed when mark_step() is called.
+    This is essential for TPU performance. For non-XLA backends, this is a no-op.
+    """
+    if _is_xla_available():
+        try:
+            import torch_xla.core.xla_model as xm
+
+            xm.mark_step()
+        except ImportError:
+            pass
+
+
+def optimizer_step(optimizer: "torch.optim.Optimizer", barrier: bool = False):
+    """Perform an optimizer step compatible with all backends including TPU/XLA.
+
+    For XLA/TPU, uses xm.optimizer_step() for proper gradient synchronization.
+    For other backends, uses the standard optimizer.step().
+
+    Args:
+        optimizer: The optimizer to step.
+        barrier: If True, synchronize across TPU cores (for distributed training).
+    """
+    if _is_xla_available():
+        try:
+            import torch_xla.core.xla_model as xm
+
+            xm.optimizer_step(optimizer, barrier=barrier)
+            return
+        except ImportError:
+            pass
+
+    optimizer.step()
 
 
 def empty_cache():

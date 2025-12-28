@@ -16,6 +16,11 @@ dependencies = [
     "platformdirs>=4.5.0",
 ]
 
+[project.optional-dependencies]
+tpu = [
+    "torch_xla>=2.6.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

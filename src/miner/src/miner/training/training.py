@@ -133,9 +133,10 @@ class TrainingPhase:
                 else:
                     logger.debug(f"Got activation shape: {activation_data.input_activations.shape}")
 
-                # Move to GPU
-                self._model_manager.model = self._model_manager.model.to(miner_settings.DEVICE)
-                input_activations_gpu = activation_data.input_activations.to(miner_settings.DEVICE)
+                # Move to GPU/TPU (uses gpu_device.to_device for XLA compatibility)
+                device = gpu_device.to_device(miner_settings.DEVICE)
+                self._model_manager.model = self._model_manager.model.to(device)
+                input_activations_gpu = activation_data.input_activations.to(device)
 
                 # populate cache
                 # activation_data.state = state
@@ -214,13 +215,14 @@ class TrainingPhase:
                             )
                             return
 
-                        # Move to GPU and enable gradients only for floating point tensors
-                        self._model_manager.model = self._model_manager.model.to(miner_settings.DEVICE)
+                        # Move to GPU/TPU and enable gradients only for floating point tensors
+                        device = gpu_device.to_device(miner_settings.DEVICE)
+                        self._model_manager.model = self._model_manager.model.to(device)
                         cached_input_activation = self._cache[activation_data.activation_id].input_activations.to(
-                            miner_settings.DEVICE
+                            device
                         )
                         backwards_grads_from_previous_miner = activation_data.input_activations.to(
-                            miner_settings.DEVICE
+                            device
                         )
 
                         # Take slices

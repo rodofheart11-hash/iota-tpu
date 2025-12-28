@@ -43,7 +43,7 @@ def compute_loss(
         vocab_size (int): Vocabulary size
         pad_token_id (int): Padding token id
         pack (bool): Whether sample packing is used
-        device (str): Device to use for loss computation
+        device (str): Device to use for loss computation (e.g., 'cuda', 'xla', 'cpu')
 
     Returns:
         torch.Tensor: Computed loss
@@ -54,8 +54,10 @@ def compute_loss(
         loss = logits.sum()
         return loss
 
-    logits_gpu = logits.to(device)
-    targets_gpu = targets.to(device)
+    # Convert device string to proper device object (handles XLA/TPU)
+    device_obj = gpu_device.to_device(device) if isinstance(device, str) else device
+    logits_gpu = logits.to(device_obj)
+    targets_gpu = targets.to(device_obj)
 
     # Shift the logits and labels to compute the loss.
     shift_logits = logits_gpu[..., :-1, :].contiguous()

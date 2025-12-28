@@ -8,7 +8,40 @@ DOTENV_PATH = os.getenv("DOTENV_PATH", ".env")
 if not load_dotenv(dotenv_path=DOTENV_PATH):
     logger.warning("No .env file found for validator")
 
-DEVICE = os.getenv("DEVICE", "cpu")
+
+def detect_device() -> str:
+    """Detect the most capable torch device available on the host.
+
+    Priority order: CUDA/ROCm > XLA (TPU) > Intel XPU > MPS > CPU
+    """
+    try:
+        import torch
+    except Exception as exc:
+        logger.debug(f"Unable to import torch for device detection: {exc}")
+        return "cpu"
+
+    if torch.cuda.is_available():
+        return "cuda"
+
+    try:
+        import torch_xla.core.xla_model as xm  # noqa: F401
+        return "xla"
+    except ImportError:
+        pass
+
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return "xpu"
+
+    mps_backend = getattr(torch, "backends", None)
+    if mps_backend is not None:
+        mps = getattr(mps_backend, "mps", None)
+        if mps is not None and mps.is_available():
+            return "mps"
+
+    return "cpu"
+
+
+DEVICE = os.getenv("DEVICE") or detect_device()
 
 # WEIGHT_SUBMIT_INTERVAL: int = 3600  # submit weight every 1 hour
 WEIGHT_SUBMIT_INTERVAL: int = 10 if (MOCK or not BITTENSOR) else 60 * 21  # submit weight every 21 minutes

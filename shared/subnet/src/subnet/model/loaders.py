@@ -30,9 +30,13 @@ def load_model_split(
     Args:
         model_name: Name of the model to load
         model_split: List of two integers indicating the layer split
-        device: Device to load the model on ('cpu', 'cuda', etc)
+        device: Device to load the model on ('cpu', 'cuda', 'xla', etc)
         seed: Random seed for deterministic initialization
     """
+    # Convert device string to proper device object (handles XLA/TPU)
+    if isinstance(device, str):
+        device = gpu_device.to_device(device)
+
     # Set random seeds for deterministic initialization
     torch.manual_seed(seed)
     gpu_device.manual_seed_all(seed)

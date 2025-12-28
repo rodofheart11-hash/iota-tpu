@@ -10,16 +10,32 @@ load_dotenv(dotenv_path=DOTENV_PATH)
 
 
 def detect_device() -> str:
-    """Detect the most capable torch device available on the host."""
+    """Detect the most capable torch device available on the host.
+
+    Priority order: CUDA/ROCm > XLA (TPU) > Intel XPU > MPS > CPU
+    """
     try:
         import torch
     except Exception as exc:  # pragma: no cover - torch import failure on non-runtime environments
         logger.debug(f"Unable to import torch for device detection: {exc}")
         return "cpu"
 
+    # Check for CUDA (includes NVIDIA and AMD ROCm)
     if torch.cuda.is_available():
         return "cuda"
 
+    # Check for XLA/TPU
+    try:
+        import torch_xla.core.xla_model as xm  # noqa: F401
+        return "xla"
+    except ImportError:
+        pass
+
+    # Check for Intel XPU
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return "xpu"
+
+    # Check for Apple MPS
     mps_backend = getattr(torch, "backends", None)
     if mps_backend is not None:
         mps = getattr(mps_backend, "mps", None)
