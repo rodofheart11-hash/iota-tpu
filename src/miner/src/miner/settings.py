@@ -15,8 +15,18 @@ else:
 def detect_device() -> str:
     """Detect the most capable torch device available on the host.
 
-    Priority order: CUDA/ROCm > XLA (TPU) > Intel XPU > MPS > CPU
+    Priority order: XLA (if env set) > CUDA/ROCm > XLA (TPU) > Intel XPU > MPS > CPU
     """
+    # If DEVICE env var is explicitly set to xla, respect that choice
+    env_device = os.getenv("DEVICE", "").lower()
+    if env_device == "xla":
+        try:
+            import torch_xla.core.xla_model as xm  # noqa: F401
+            logger.info("Using XLA/TPU as explicitly requested via DEVICE=xla")
+            return "xla"
+        except ImportError:
+            logger.warning("DEVICE=xla requested but torch_xla not available, falling back to auto-detect")
+
     try:
         import torch
     except Exception as exc:  # pragma: no cover - torch import failure on non-runtime environments
